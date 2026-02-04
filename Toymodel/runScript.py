@@ -17,6 +17,6 @@ scenarios = [
 ]
 
 for scenario in scenarios:
-    script.trainAndEvaluateNetwork(
+    main.trainAndEvaluateNetwork(
         scenario[1], scenario[0], scenario[2], scenario[3], scenario[4]
     )
