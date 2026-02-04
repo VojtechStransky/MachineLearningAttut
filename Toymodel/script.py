@@ -3,7 +3,31 @@ import tensorflow as tf
 import matplotlib.pyplot as plt
 import os
 
-# autodiferencni metody, definice loss function, zohlednění korelace derivací, metrika derivace, derivace dat ve vstup, parametr vahy derivace
+
+Weight = 1
+
+
+class SaveBestModel(tf.keras.callbacks.Callback):
+    def __init__(self, save_best_metric="val_loss", this_max=False):
+        self.save_best_metric = save_best_metric
+        self.max = this_max
+        if this_max:
+            self.best = float("-inf")
+        else:
+            self.best = float("inf")
+
+    def on_epoch_end(self, epoch, logs=None):
+        metric_value = logs[self.save_best_metric]
+
+        if self.max:
+            if metric_value > self.best:
+                self.best = metric_value
+                self.best_weights = self.model.get_weights()
+
+        else:
+            if metric_value < self.best:
+                self.best = metric_value
+                self.best_weights = self.model.get_weights()
 
 
 class DerivativeMSETrainer(tf.keras.Model):
@@ -34,14 +58,10 @@ class DerivativeMSETrainer(tf.keras.Model):
 
             total_loss = self.loss_func(y_true, y_pred, dy_true, dy_pred)
 
-        # Backpropagation
         grads = tape.gradient(total_loss, self.model.trainable_variables)
         self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
 
         return {"loss": total_loss, "mse": mse_loss}
-
-
-Weight = 1
 
 
 def f(x):
@@ -58,21 +78,30 @@ def custom_loss(y_true, y_pred, dy_true, dy_pred):
     )
 
 
-def trainAndEvaluateNetwork(neuronsNumber, activation, epochsNumber):
+def trainAndEvaluateNetwork(neuronsNumber, activation, epochsNumber, examples, seed):
+    tf.random.set_seed(seed)
+
     folder = (
-        "derivative_" + activation + "_" + str(neuronsNumber) + "_" + str(epochsNumber)
+        "multiplerunsdifferentseed"
+        + activation
+        + "_"
+        + str(neuronsNumber)
+        + "_"
+        + str(epochsNumber)
+        + "_"
+        + str(examples)
+        + "_"
+        + str(seed)
     )
 
-    train_examples = np.linspace(-80, 80, 1000).reshape(
-        -1, 1
-    )  # overfit => more samples
+    train_examples = np.linspace(-80, 80, examples).reshape(-1, 1)
     train_labels = f(train_examples)
     train_derivative_labels = df(train_examples)
-    test_examples = np.linspace(-75, 75, 200).reshape(-1, 1)
+    test_examples = np.linspace(-75, 75, int(examples / 5)).reshape(-1, 1)
     test_labels = f(test_examples)
 
-    validation_examples = np.linspace(-78, 78, 200).reshape(-1, 1)
-    validation_examples_over = np.linspace(-110, 110, 200).reshape(-1, 1)
+    validation_examples = np.linspace(-78, 78, int(examples / 5)).reshape(-1, 1)
+    validation_examples_over = np.linspace(-110, 110, int(examples / 5)).reshape(-1, 1)
     validation_labels = f(validation_examples)
     validation_labels_over = f(validation_examples_over)
 
@@ -84,12 +113,14 @@ def trainAndEvaluateNetwork(neuronsNumber, activation, epochsNumber):
         (validation_examples, validation_labels)
     )
 
-    BATCH_SIZE = 20
+    BATCH_SIZE = 100
     SHUFFLE_BUFFER_SIZE = 1000
 
     train_dataset = train_dataset.shuffle(SHUFFLE_BUFFER_SIZE).batch(BATCH_SIZE)
-    test_dataset = test_dataset.batch(BATCH_SIZE)
-    validation_dataset = validation_dataset.batch(BATCH_SIZE)
+    test_dataset = test_dataset.shuffle(SHUFFLE_BUFFER_SIZE).batch(BATCH_SIZE)
+    validation_dataset = validation_dataset.shuffle(SHUFFLE_BUFFER_SIZE).batch(
+        BATCH_SIZE
+    )
 
     model_base = tf.keras.Sequential(
         [
@@ -106,26 +137,39 @@ def trainAndEvaluateNetwork(neuronsNumber, activation, epochsNumber):
         model=model_base, loss_func=custom_loss, lambda_derivative=0.1
     )
 
+    initial_learning_rate = 0.0003
+    steps_per_epoch = examples / BATCH_SIZE
+    decay_steps = steps_per_epoch * 18
+    decay_rate = 0.9982
+
+    lr_schedule = tf.keras.optimizers.schedules.ExponentialDecay(
+        initial_learning_rate,
+        decay_steps=decay_steps,
+        decay_rate=decay_rate,
+        staircase=True,
+    )
+
     model.compile(
-        optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005, epsilon=1e-7),  # step
+        optimizer=tf.keras.optimizers.Adam(
+            learning_rate=lr_schedule, epsilon=1e-7
+        ),  # step
         loss=tf.keras.losses.MeanSquaredError(),  # dummy
     )
 
-    callback = tf.keras.callbacks.EarlyStopping(monitor="loss", patience=4000)
+    save_best_model = SaveBestModel()
 
     history = model.fit(
         train_dataset,
         epochs=epochsNumber,
         validation_data=test_dataset,
-        callbacks=[callback],
+        callbacks=[save_best_model],
     )
 
-    len(history.history["loss"])
+    model.set_weights(save_best_model.best_weights)
 
     if not os.path.exists(folder):
         os.makedirs(folder)
 
-    # Loss curve
     plt.figure(figsize=(8, 5))
     plt.plot(history.history["loss"], label="train loss")
     plt.plot(history.history["val_loss"], label="val loss")
@@ -138,7 +182,6 @@ def trainAndEvaluateNetwork(neuronsNumber, activation, epochsNumber):
     plt.tight_layout()
     plt.savefig(folder + "/metrics.png")
 
-    # Plot true function vs. network prediction
     y_pred = model.predict(validation_examples)
 
     plt.figure(figsize=(8, 5))
@@ -171,5 +214,5 @@ def trainAndEvaluateNetwork(neuronsNumber, activation, epochsNumber):
 
     loss = model.evaluate(validation_dataset)
 
-    with open("logderivative.txt", "a") as myfile:
+    with open("multiplerunsdifferentseed.txt", "a") as myfile:
         myfile.write(folder + " " + str(loss) + "\n")
