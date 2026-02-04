@@ -1,4 +1,4 @@
-import script
+import main
 import numpy as np
 
 activationFunctions = ["tanh"]
